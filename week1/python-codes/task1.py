@@ -5,8 +5,8 @@ from bs4 import BeautifulSoup
 from IPython.display import Markdown, display
 from openai import OpenAI
 
-load_dotenv(override=True)
-api_key = os.getenv('OPENAI_API_KEY')
+load_dotenv(override=True) # this checks if the api is already loaded, it will be replaced by the one stored in .env file
+api_key = os.getenv('OPENAI_API_KEY') # load the api key from the .end file and save in api_key variable
 
 if not api_key:
     print("No API key was found - please head over to the troubleshooting notebook in this folder to identify & fix!")
@@ -17,7 +17,7 @@ elif api_key.strip() != api_key:
 else:
     print("API key found and looks good so far!")
 
-openai = OpenAI()
+openai = OpenAI() # To use the openai api , we created an object or instance of openai client
 
 
 
