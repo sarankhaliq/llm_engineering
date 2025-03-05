@@ -7,6 +7,7 @@ from openai import OpenAI
 
 load_dotenv(override=True)
 api_key=os.getenv("OPENAI_API_KEY")
+print(api_key)
 
 if not api_key:
     print("Api key not found")
