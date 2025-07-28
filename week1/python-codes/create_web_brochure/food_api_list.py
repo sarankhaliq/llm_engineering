@@ -37,10 +37,10 @@ def get_kcal_for_food(food_name):
 
 # List of foods
 food_list = ["banana", "boiled egg", "rice", "chicken curry", "yogurt"]
-
+Parsed_Food_List = ['burger', 'fries', 'ketchup', 'onion', 'pickles']
 # Process all foods and calculate total kcal
 total_kcal = 0
-for food in food_list:
+for food in Parsed_Food_List:
     total_kcal += get_kcal_for_food(food)
 
 print(f"\n🔥 Total Calories: {total_kcal} kcal")

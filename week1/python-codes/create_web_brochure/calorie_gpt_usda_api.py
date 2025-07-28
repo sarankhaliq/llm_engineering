@@ -1,120 +1,154 @@
 import os
 import base64
-import json
-import requests
 from dotenv import load_dotenv
 from openai import OpenAI
+import requests
 
-# Load API keys from .env
-load_dotenv()
-openai_key = os.getenv("OPENAI_API_KEY")
-usda_key = os.getenv("USDA_API_KEY")
+# Load the API key
+load_dotenv(override=True)
+api_key = os.getenv('OPENAI_API_KEY')
 
-# Check API keys
-if openai_key and openai_key.startswith('sk-'):
-    print("✅ OpenAI API key loaded.")
+# Check API Key
+if api_key and api_key.startswith('sk-proj-') and len(api_key) > 10:
+    print("API key looks good.")
 else:
-    raise Exception("❌ Invalid or missing OpenAI API key.")
+    raise ValueError("Invalid API key. Please check your .env file.")
 
-if not usda_key:
-    raise Exception("❌ Missing USDA API key.")
+# Initialize OpenAI client
+openai = OpenAI(api_key=api_key)
+MODEL = "gpt-4o"
 
-client = OpenAI(api_key=openai_key)
-
-# Function: Send image to ChatGPT to get food items & quantity
-def detect_foods_with_chatgpt(image_path):
+# Convert image to base64
+def encode_image_to_base64(image_path):
     with open(image_path, "rb") as image_file:
-        image_bytes = image_file.read()
+        return base64.b64encode(image_file.read()).decode("utf-8")
 
-    prompt = """
-You are a nutrition assistant. Detect all food items in the image and return a JSON dictionary in this format:
-{
-  "banana": 2,
-  "apple": 1,
-  ...
-}
-Only include common food names and estimate quantity as an integer. Do NOT return explanation or description.
-    """
+# Core function: extract food list from image
+def extract_food_list_from_image(image_path):
+    base64_image = encode_image_to_base64(image_path)
+    print(f"Sending image to GPT-4o: {image_path}")
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
+    response = openai.chat.completions.create(
+        model=MODEL,
         messages=[
-            {"role": "system", "content": "You are a helpful nutritionist."},
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode()}"}}
-                ],
-            },
-        ],
-        max_tokens=300,
-        temperature=0.3,
+                    {
+                        "type": "text",
+                        "text": (
+                            "Analyze the food items in the image and return only a clean valid Python list "
+                            "containing the names of the identified foods. No explanation, no markdown. "
+                            "Just return a list like this: ['burger', 'fries', 'ketchup']"
+                        )
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ]
     )
 
-    content = response.choices[0].message.content.strip()
+    result_text = response.choices[0].message.content.strip()
+    print("Raw GPT Response:\n", result_text)
 
+    # Try to safely evaluate the string into a Python list
     try:
-        food_data = json.loads(content)
-        print("✅ Parsed GPT response:", food_data)
-        return food_data
-    except json.JSONDecodeError:
-        print("❌ GPT response was not valid JSON:")
-        print(content)
-        return {}
+        food_list = eval(result_text)
+        if isinstance(food_list, list):
+            print("✅ Parsed Food List:", food_list)
+            return food_list
+        else:
+            raise ValueError("Parsed result is not a list.")
+    except Exception as e:
+        print("⚠️ Failed to parse food list:", e)
+        return []
 
-# Function: Query USDA API for food item calories
-def get_calories_from_usda(food_name):
-    search_url = "https://api.nal.usda.gov/fdc/v1/foods/search"
+# Load the USDA API Key from .env
+load_dotenv()
+API_KEY = os.getenv("USDA_API_KEY")
+SEARCH_URL = "https://api.nal.usda.gov/fdc/v1/foods/search"
+
+# Function to get kcal for a food item
+def get_kcal_for_food(food_name):
     params = {
+        "api_key": API_KEY,
         "query": food_name,
-        "api_key": usda_key,
         "pageSize": 1,
-        "dataType": "Foundation,Branded,Survey (FNDDS)"
+        "requireAllWords": True
     }
 
-    response = requests.get(search_url, params=params)
-    if response.status_code == 200:
-        results = response.json()
-        if results.get("foods"):
-            food = results["foods"][0]
-            for nutrient in food.get("foodNutrients", []):
-                if nutrient["nutrientName"].lower() == "energy" and "kcal" in nutrient["unitName"].lower():
-                    return nutrient["value"]
-    return 0
+    response = requests.get(SEARCH_URL, params=params)
+    if response.status_code != 200:
+        print(f"❌ Error for '{food_name}': {response.status_code}")
+        return 0
 
-# Function: Estimate total calories from all detected foods
-def estimate_total_calories(food_dict):
-    total = 0
-    detailed_info = {}
+    data = response.json()
+    if "foods" in data and len(data["foods"]) > 0:
+        food = data["foods"][0]
+        kcal_value = 0
+        for nutrient in food.get("foodNutrients", []):
+            if nutrient["nutrientName"].lower() in ["energy", "energy (kcal)"]:
+                kcal_value = nutrient["value"]
+                break
+        print(f"🍽️ {food_name.title()}: {kcal_value} kcal")
+        return kcal_value
+    else:
+        print(f"❌ No results for '{food_name}'")
+        return 0
 
-    for food, quantity in food_dict.items():
-        calorie_per_unit = get_calories_from_usda(food)
-        total_calories = calorie_per_unit * quantity
-        total += total_calories
-        detailed_info[food] = {
-            "quantity": quantity,
-            "per_unit_calories": calorie_per_unit,
-            "total": total_calories
-        }
 
-    return total, detailed_info
 
-# Main Entry Function
-def analyze_image(image_path):
-    food_dict = detect_foods_with_chatgpt(image_path)
-    if not food_dict:
-        print("No food detected or JSON parsing failed.")
-        return
 
-    total_calories, details = estimate_total_calories(food_dict)
-    print("\n🍎 Food Breakdown:")
-    for food, data in details.items():
-        print(f"- {food}: {data['quantity']} × {data['per_unit_calories']} kcal = {data['total']} kcal")
+# Run on sample image
+food_items = extract_food_list_from_image("neckview.jpeg")
+# Process all foods and calculate total kcal
+total_kcal = 0
+for food in food_items:
+    total_kcal += get_kcal_for_food(food)
 
-    print(f"\n🔥 Estimated Total Calories: {total_calories:.2f} kcal")
+print(f"\n🔥 Total Calories: {total_kcal} kcal")
 
-# Example usage:
-if __name__ == "__main__":
-    image_path = "fruits.jpg"  # Replace with your actual image path
-    analyze_image(image_path)
+
+
+
+
+
+
+
+# Load the USDA API Key from .env
+load_dotenv()
+API_KEY = os.getenv("USDA_API_KEY")
+SEARCH_URL = "https://api.nal.usda.gov/fdc/v1/foods/search"
+
+# Function to get kcal for a food item
+def get_kcal_for_food(food_name):
+    params = {
+        "api_key": API_KEY,
+        "query": food_name,
+        "pageSize": 1,
+        "requireAllWords": True
+    }
+
+    response = requests.get(SEARCH_URL, params=params)
+    if response.status_code != 200:
+        print(f"❌ Error for '{food_name}': {response.status_code}")
+        return 0
+
+    data = response.json()
+    if "foods" in data and len(data["foods"]) > 0:
+        food = data["foods"][0]
+        kcal_value = 0
+        for nutrient in food.get("foodNutrients", []):
+            if nutrient["nutrientName"].lower() in ["energy", "energy (kcal)"]:
+                kcal_value = nutrient["value"]
+                break
+        print(f"🍽️ {food_name.title()}: {kcal_value} kcal")
+        return kcal_value
+    else:
+        print(f"❌ No results for '{food_name}'")
+        return 0
